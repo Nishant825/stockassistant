@@ -13,7 +13,7 @@ if not GEMINI_API_KEY:
     st.error("Google API Key missing! Please set GOOGLE_API_KEY in Streamlit secrets.")
     st.stop()
 
-@tool
+@tool(description="Fetch recent stock data and company info for a given ticker.")
 def get_stock_data(ticker: str) -> str:
     try:
         stock = yf.Ticker(ticker)
