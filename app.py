@@ -71,8 +71,8 @@ agent = create_tool_calling_agent(llm_with_tools, [get_stock_data], prompt)
 agent_executor = AgentExecutor(agent=agent, tools=[get_stock_data], verbose=True)
 
 # Streamlit UI setup
-st.set_page_config(page_title="Gemini Financial Stock Advisor", page_icon="📈")
-st.title("📈 Gemini Financial Stock Advisor")
+st.set_page_config(page_title="Financial Stock Advisor", page_icon="📈")
+st.title("📈 Financial Stock Advisor")
 st.markdown("Ask me about stocks and I'll fetch latest data and advice!")
 
 if "messages" not in st.session_state:
