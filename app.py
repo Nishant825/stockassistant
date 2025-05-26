@@ -1,85 +1,116 @@
 import streamlit as st
-import os
-import requests
-from dotenv import load_dotenv
-import openai
-from langchain.agents import initialize_agent, Tool, AgentType
-from langchain.llms import OpenAI as LangOpenAI  # avoid conflict
+import yfinance as yf
+from langchain.tools import tool
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Load API key from Streamlit secrets
+GEMINI_API_KEY = st.secrets.get("GOOGLE_API_KEY")
 
-# Get Alpha Vantage API Key
-alpha_api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "9YVV7B4N0AH7L891")
+if not GEMINI_API_KEY:
+    st.error("Google API Key missing! Please set GOOGLE_API_KEY in Streamlit secrets.")
+    st.stop()
 
-# Function to fetch stock price
-def fetch_stock_price(stock_symbol: str):
-    url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={stock_symbol}&apikey={alpha_api_key}'
-    response = requests.get(url)
-    data = response.json()
+@tool
+def get_stock_data(ticker: str) -> str:
+    try:
+        stock = yf.Ticker(ticker)
+        history = stock.history(period="5d")
+        info = stock.info
 
-    if "Time Series (Daily)" in data:
-        latest_day = list(data["Time Series (Daily)"].keys())[0]
-        close_price = data["Time Series (Daily)"][latest_day]['4. close']
-        return f"The latest closing price of {stock_symbol.upper()} is ${close_price}"
-    else:
-        return "Stock data not available or invalid symbol."
+        sector = info.get("sector", "N/A")
+        industry = info.get("industry", "N/A")
+        market_cap = info.get("marketCap", "N/A")
+        trailing_pe = info.get("trailingPE", "N/A")
+        forward_pe = info.get("forwardPE", "N/A")
+        summary = info.get("longBusinessSummary", "No business summary available.")
 
-# Function to generate investment suggestions using OpenAI
-def generate_investment_suggestions(query: str):
-    prompt = f"""
-    Based on the following query, suggest some investment options and strategies for stocks:
+        if history.empty:
+            price_data = f"No recent price history available for {ticker}."
+        else:
+            price_data = history[['Open', 'High', 'Low', 'Close', 'Volume']].to_string()
 
-    Query: {query}
-    
-    Please provide a detailed plan with investment suggestions, including stock names, market trends, and tips.
-    """
+        return (
+            f"Price History (last 5 days):\n{price_data}\n\n"
+            f"Company Info for {ticker.upper()}:\n"
+            f"Sector: {sector}\n"
+            f"Industry: {industry}\n"
+            f"Market Cap: {market_cap}\n"
+            f"Trailing PE Ratio: {trailing_pe}\n"
+            f"Forward PE Ratio: {forward_pe}\n"
+            f"Business Summary: {summary}"
+        )
+    except Exception as e:
+        return f"Error fetching stock data for '{ticker}': {e}. Please check the ticker symbol."
 
-    response = openai.Completion.create(
-        model="gpt-3.5-turbo",  # GPT-4 not supported via `.Completion`, switch to Chat API for that
-        prompt=prompt,
-        max_tokens=300
-    )
-
-    return response.choices[0].text.strip()
-
-# Tool-compatible function
-def stock_investment_function(query: str):
-    if "stock" in query.lower() or "investment" in query.lower():
-        return generate_investment_suggestions(query)
-    return "Please enter a query related to stock investments."
-
-# LangChain LLM setup
-llm = LangOpenAI(openai_api_key=openai.api_key)
-
-# LangChain tools
-tools = [
-    Tool(
-        name="Stock Investment Advisor",
-        func=stock_investment_function,
-        description="Provides investment suggestions and plans for stocks based on input queries"
-    ),
-    Tool(
-        name="Fetch Stock Price",
-        func=fetch_stock_price,
-        description="Fetches real-time stock prices using the Alpha Vantage API"
-    )
-]
-
-# Agent setup
-agent = initialize_agent(
-    tools,
-    llm,
-    agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True
+# Initialize Gemini model with API key
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-flash",
+    google_api_key=GEMINI_API_KEY,
+    temperature=0.3
 )
 
-# Streamlit UI
-st.title("📈 Stock Investment Assistant")
+# Bind tools to model
+llm_with_tools = llm.bind_tools([get_stock_data])
 
-user_query = st.text_area("Enter your investment goals or queries")
+# Prompt template for the agent
+prompt = ChatPromptTemplate.from_messages([
+    ("system", (
+        "You are a knowledgeable financial advisor. Use 'get_stock_data' tool for stock queries. "
+        "If no data, explain why. For other questions, use general knowledge."
+    )),
+    MessagesPlaceholder("chat_history", optional=True),
+    ("human", "{input}"),
+    MessagesPlaceholder("agent_scratchpad"),
+])
 
-if user_query:
-    st.write("🤖 Processing your query...")
-    result = agent.run(user_query)
-    st.subheader("💡 Suggestions")
-    st.write(result)
+# Create agent and executor
+agent = create_tool_calling_agent(llm_with_tools, [get_stock_data], prompt)
+agent_executor = AgentExecutor(agent=agent, tools=[get_stock_data], verbose=True)
+
+# Streamlit UI setup
+st.set_page_config(page_title="Gemini Financial Stock Advisor", page_icon="📈")
+st.title("📈 Gemini Financial Stock Advisor")
+st.markdown("Ask me about stocks and I'll fetch latest data and advice!")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Display chat history
+for msg in st.session_state.messages:
+    if isinstance(msg, HumanMessage):
+        with st.chat_message("user"):
+            st.markdown(msg.content)
+    elif isinstance(msg, AIMessage):
+        with st.chat_message("assistant"):
+            st.markdown(msg.content)
+    elif isinstance(msg, ToolMessage):
+        with st.chat_message("tool_output"):
+            st.markdown(f"**Tool Output:**\n```\n{msg.content}\n```")
+
+# User input
+user_input = st.chat_input("Ask about a stock (e.g., 'Analyze AAPL', 'Market cap TSLA', or anything else)")
+
+if user_input:
+    st.session_state.messages.append(HumanMessage(content=user_input))
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    with st.spinner("Analyzing..."):
+        try:
+            response = agent_executor.invoke({
+                "input": user_input,
+                "chat_history": st.session_state.messages
+            })
+            answer = response["output"]
+            st.session_state.messages.append(AIMessage(content=answer))
+            with st.chat_message("assistant"):
+                st.markdown(answer)
+
+        except Exception as err:
+            error_msg = f"Oops! Something went wrong: {err}"
+            st.session_state.messages.append(AIMessage(content=error_msg))
+            with st.chat_message("assistant"):
+                st.error(error_msg)
