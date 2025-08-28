@@ -21,7 +21,9 @@ def get_stock_data(ticker: str) -> str:
         history = stock.history(period="5d")
         info = stock.info
 
-        sector = info.get("sector", "N/A")
+        sector = info.get("sector", "N/A")0.
+        +*/96*3\13WTRFAED3W4]P
+       E54 =;0TYG
         industry = info.get("industry", "N/A")
         market_cap = info.get("marketCap", "N/A")
         trailing_pe = info.get("trailingPE", "N/A")
